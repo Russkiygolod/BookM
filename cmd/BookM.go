@@ -14,7 +14,7 @@ import (
 
 func main() {
 	//  БД  //
-
+	// выбор бд обуславливается постановкой задачи
 	//PostgreSQL
 	url := "postgres://" + "postgres" + ":" + "postgres" + "@" + "localhost" + ":" + "5432" + "/" + "ttt"
 	conn, err := pgxpool.ParseConfig(url)
