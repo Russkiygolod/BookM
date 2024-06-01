@@ -1,29 +1,29 @@
 package api
 
 import (
-	"BookM/pkg/storage"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
+	"BookM/internal"
+	"BookM/pkg/model/Book"
+	"BookM/pkg/model/Order"
+
 	"github.com/gorilla/mux"
 )
 
-// API приложения.
 type API struct {
-	r  *mux.Router       // маршрутизатор запросов
-	db storage.Interface // база данных
+	r *mux.Router // маршрутизатор запросов
+	I internal.Inter
 }
 
-// маршрутизатор запросов создается var router = mux.NewRouter()
-
-// Конструктор API.
-func New(db storage.Interface) *API {
+func New(I internal.Inter) *API {
 	api := API{
-		r:  mux.NewRouter(),
-		db: db,
+		r: mux.NewRouter(),
+		I: I,
 	}
-	api.endpoints() //func main(){x := db.New() v:= New(x) v.endpoints() }
+	api.endpoints()
 	return &api
 }
 
@@ -33,28 +33,30 @@ func (api *API) Router() *mux.Router {
 }
 
 // Регистрация методов API в маршрутизаторе запросов.
-// api.r - mux.NewRouter()
-
-// HandleFunc - зарезервируемая функция
 func (api *API) endpoints() {
-	api.r.HandleFunc("/orders", api.ordersHandler).Methods(http.MethodGet)
-	api.r.HandleFunc("/orders/{id}", api.orderOneHandler).Methods(http.MethodGet)
+	api.r.HandleFunc("/orders", api.GetOrdersHandler).Methods(http.MethodGet)
+	api.r.HandleFunc("/orders/{id}", api.GetOrderOneHandler).Methods(http.MethodGet)
 	api.r.HandleFunc("/orders", api.addOrderHandler).Methods(http.MethodPost)
 	api.r.HandleFunc("/orders/{id}", api.updateOrderHandler).Methods(http.MethodPatch)
 	api.r.HandleFunc("/orders/{id}", api.deleteOrderHandler).Methods(http.MethodDelete)
-	api.r.HandleFunc("/books", api.booksHandler).Methods(http.MethodGet)
+	api.r.HandleFunc("/books", api.GetBooksHandler).Methods(http.MethodGet)
 	api.r.HandleFunc("/books", api.addBooksHandler).Methods(http.MethodPost)
 	api.r.HandleFunc("/books/{id}", api.updateBooksHandler).Methods(http.MethodPatch)
 	api.r.HandleFunc("/books/{id}", api.deleteBooksHandler).Methods(http.MethodDelete)
-
 }
 
 // ordersHandler возвращает все заказы.
-func (api *API) ordersHandler(w http.ResponseWriter, r *http.Request) {
-	// Получение данных из БД.
-	orders, err := api.db.Orders()
+func (api *API) GetOrdersHandler(w http.ResponseWriter, r *http.Request) {
+	// Получение данных из БД
+	orders, err := api.I.GetOrders(context.Background())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	// Отправка данных клиенту в формате JSON.
-	json.NewEncoder(w).Encode(orders)
+	err = json.NewEncoder(w).Encode(orders)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -64,7 +66,7 @@ func (api *API) ordersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ordersHandler возвращает заказ по ID
-func (api *API) orderOneHandler(w http.ResponseWriter, r *http.Request) {
+func (api *API) GetOrderOneHandler(w http.ResponseWriter, r *http.Request) {
 	// Получение данных из БД.
 	s := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(s)
@@ -72,11 +74,17 @@ func (api *API) orderOneHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var o storage.Order
-	o.ID = id
-	orders, err := api.db.OrdersOne(o)
+	var O Order.Order
+	O.ID = id
+	orders, err := api.I.GetOrderByID(context.Background(), O)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	// Отправка данных клиенту в формате JSON.
-	json.NewEncoder(w).Encode(orders)
+	err = json.NewEncoder(w).Encode(orders)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -87,18 +95,18 @@ func (api *API) orderOneHandler(w http.ResponseWriter, r *http.Request) {
 
 // addOrderHandler создает новый заказ.
 func (api *API) addOrderHandler(w http.ResponseWriter, r *http.Request) {
-	var o storage.Order
-	err := json.NewDecoder(r.Body).Decode(&o)
+	var O Order.Order
+	err := json.NewDecoder(r.Body).Decode(&O)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	id, err := api.db.AddOrders(o)
-	w.Write([]byte(strconv.Itoa(id)))
+	id, err := api.I.AddOrders(context.Background(), O)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	} else {
+		w.Write([]byte(strconv.Itoa(id)))
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -106,27 +114,27 @@ func (api *API) addOrderHandler(w http.ResponseWriter, r *http.Request) {
 // updateOrderHandler обновляет данные заказа по ID
 func (api *API) updateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	// Считывание параметра {id} из пути запроса.
-	// Например, /orders/45.
 	s := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(s)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Декодирование в переменную тела запроса,
-	// которое должно содержать JSON-представление
-	// обновляемого объекта.
-	var o storage.Order
-	err = json.NewDecoder(r.Body).Decode(&o)
+	var O Order.Order
+	err = json.NewDecoder(r.Body).Decode(&O)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	o.ID = id
+	O.ID = id
 	// Обновление данных в БД.
-	api.db.UpdateOrder(o)
-	// Отправка клиенту статуса успешного выполнения запроса
-	w.WriteHeader(http.StatusOK)
+	err = api.I.UpdateOrder(context.Background(), O)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // deleteOrderHandler удаляет заказ по ID
@@ -137,16 +145,21 @@ func (api *API) deleteOrderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var o storage.Order
-	o.ID = id
-	api.db.DeleteOrder(o)
-	w.WriteHeader(http.StatusOK)
+	var O Order.Order
+	O.ID = id
+	err = api.I.DeleteOrder(context.Background(), O)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // ordersHandler возвращает все книги
-func (api *API) booksHandler(w http.ResponseWriter, r *http.Request) {
+func (api *API) GetBooksHandler(w http.ResponseWriter, r *http.Request) {
 	// Получение данных из БД.
-	book, err := api.db.Books()
+	book, err := api.I.GetBooks(context.Background())
 	// Отправка данных клиенту в формате JSON.
 	json.NewEncoder(w).Encode(book)
 	if err != nil {
@@ -159,13 +172,13 @@ func (api *API) booksHandler(w http.ResponseWriter, r *http.Request) {
 
 // addOrderHandler добавляет новую книгу
 func (api *API) addBooksHandler(w http.ResponseWriter, r *http.Request) {
-	var b storage.Book
+	var b Book.Book
 	err := json.NewDecoder(r.Body).Decode(&b)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	err = api.db.AddBooks(b)
+	err = api.I.AddBooks(context.Background(), b)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -177,17 +190,13 @@ func (api *API) addBooksHandler(w http.ResponseWriter, r *http.Request) {
 // updateOrderHandler обновляет данные книги по ID
 func (api *API) updateBooksHandler(w http.ResponseWriter, r *http.Request) {
 	// Считывание параметра {id} из пути запроса.
-	// Например, /orders/45.
 	s := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(s)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Декодирование в переменную тела запроса,
-	// которое должно содержать JSON-представление
-	// обновляемого объекта.
-	var b storage.Book
+	var b Book.Book
 	err = json.NewDecoder(r.Body).Decode(&b)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -195,9 +204,13 @@ func (api *API) updateBooksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	b.Id = id
 	// Обновление данных в БД.
-	api.db.UpdateBook(b)
-	// Отправка клиенту статуса успешного выполнения запроса
-	w.WriteHeader(http.StatusOK)
+	err = api.I.UpdateBook(context.Background(), b)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // deleteOrderHandler удаляет книгу по ID
@@ -208,8 +221,13 @@ func (api *API) deleteBooksHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var b storage.Book
+	var b Book.Book
 	b.Id = id
-	api.db.DeleteBook(b)
-	w.WriteHeader(http.StatusOK)
+	err = api.I.DeleteBook(context.Background(), b)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 }

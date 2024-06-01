@@ -1,3 +1,4 @@
+-- этот файл думаю вообще не нужно в гитхаб сувать
 DROP TABLE IF EXISTS books, orders;
 
 CREATE TABLE books (

@@ -1,20 +1,21 @@
 package postgres
 
 import (
-	"BookM/pkg/storage"
 	"context"
 	"log"
 	"sync"
 	"time"
+
+	"BookM/pkg/model/Book"
+	"BookM/pkg/model/Order"
 
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // Хранилище данных.
 type Store struct {
-	cl     *pgxpool.Pool  //подключение
-	orders *storage.Order //заказы
-	m      sync.Mutex     //синхронизация
+	cl *pgxpool.Pool
+	m  sync.Mutex
 }
 
 // Конструктор объекта хранилища.
@@ -26,41 +27,37 @@ func New(conf *pgxpool.Config) *Store {
 	if err != nil {
 		log.Fatalf("Failed to init DB conf - %v", err)
 	}
-	postgres.orders = &storage.Order{}
 
+	//postgres.orders = &Order.Order{}
 	return &postgres
 }
 
 // выдает все заказы
-func (s *Store) Orders() ([]storage.Order, error) {
+func (s *Store) GetOrders(ctx context.Context) ([]Order.Order, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	rows, err := s.cl.Query(
-		context.Background(), `
-	SELECT orders.id, orders.deliveryAddress, orders.date, orders.price, (
-	SELECT ARRAY_TO_JSON(ARRAY_AGG(ROW_TO_JSON(b.*))) AS array_to_json FROM (
-		SELECT
-		id,
-		title,
-		author,
-		price
-		FROM books where id = any (orders.books_id)
-		) AS b
-	) AS books from orders
-	ORDER BY orders.id ASC
+		ctx, `
+			SELECT orders.id, orders.deliveryAddress, orders.date, orders.price, (
+				SELECT ARRAY_TO_JSON(ARRAY_AGG(ROW_TO_JSON(b.*))) AS array_to_json FROM (
+					SELECT
+					id,
+					title,
+					author,
+					price
+					FROM books where id = any (orders.books_id)
+					) AS b
+			) AS books from orders
+			ORDER BY orders.id ASC
 `)
 	if err != nil {
 		return nil, err
 	}
-	var posts []storage.Order
+	var posts []Order.Order
 	for rows.Next() {
-		var t storage.Order
+		var t Order.Order
 		err = rows.Scan(
-			&t.ID,
-			&t.DeliveryAddress,
-			&t.Date,
-			&t.Price,
-			&t.Books,
+			&t.ID, &t.DeliveryAddress, &t.Date, &t.Price, &t.Books,
 		)
 		if err != nil {
 			return nil, err
@@ -71,11 +68,11 @@ func (s *Store) Orders() ([]storage.Order, error) {
 }
 
 // выдает заказ по ID
-func (s *Store) OrdersOne(O storage.Order) ([]storage.Order, error) {
+func (s *Store) GetOrderByID(ctx context.Context, O Order.Order) ([]Order.Order, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	rows, err := s.cl.Query(
-		context.Background(),
+		ctx,
 		`	SELECT orders.id, orders.deliveryAddress, orders.date, orders.price, (
 			SELECT ARRAY_TO_JSON(ARRAY_AGG(ROW_TO_JSON(b.*))) AS array_to_json FROM (
 				SELECT
@@ -92,15 +89,11 @@ func (s *Store) OrdersOne(O storage.Order) ([]storage.Order, error) {
 	if err != nil {
 		return nil, err
 	}
-	var posts []storage.Order
+	var posts []Order.Order
 	for rows.Next() {
-		var t storage.Order
+		var t Order.Order
 		err = rows.Scan(
-			&t.ID,
-			&t.DeliveryAddress,
-			&t.Date,
-			&t.Price,
-			&t.Books,
+			&t.ID, &t.DeliveryAddress, &t.Date, &t.Price, &t.Books,
 		)
 		if err != nil {
 			return nil, err
@@ -111,17 +104,17 @@ func (s *Store) OrdersOne(O storage.Order) ([]storage.Order, error) {
 }
 
 // создает новый заказ
-func (s *Store) AddOrders(O storage.Order) (int, error) {
+func (s *Store) AddOrders(ctx context.Context, O Order.Order) (int, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	var date string
-	var Books = O.Books
-	var book_id []int
-	var book_price int
+	Books := O.Books
+	var bookID []int
+	var bookPrice int
 	for i := 0; i < len(Books); i++ {
 		b := Books[i]
 		rows, err := s.cl.Query(
-			context.Background(),
+			ctx,
 			`
 			SELECT price from books 
 			WHERE id = $1; 
@@ -132,36 +125,37 @@ func (s *Store) AddOrders(O storage.Order) (int, error) {
 			return 0, err
 		}
 		var price int
+
 		for rows.Next() {
-			var t storage.Book
 			err = rows.Scan(
-				&t.Price,
+				&b.Price,
 			)
 			if err != nil {
 				return 0, err
 			}
-			price = t.Price
-			book_id = append(book_id, b.Id)
-			book_price = book_price + price
+			price = b.Price
+			bookID = append(bookID, b.Id)
+			bookPrice = bookPrice + price
 		}
 	}
+
 	date = time.Now().Format("02/01/2006")
 	rows, err := s.cl.Query(
-		context.Background(),
+		ctx,
 		`
 		INSERT INTO orders (deliveryAddress, date, books_id, price) VALUES ($1, $2, $3, $4) RETURNING id; 
 	`,
 		O.DeliveryAddress,
 		date,
-		book_id,
-		book_price,
+		bookID,
+		bookPrice,
 	)
 	if err != nil {
 		return 0, err
 	}
 	var id int
 	for rows.Next() {
-		var t storage.Order
+		var t Order.Order
 		err = rows.Scan(
 			&t.ID,
 		)
@@ -174,13 +168,13 @@ func (s *Store) AddOrders(O storage.Order) (int, error) {
 }
 
 // обновляет заказ
-func (s *Store) UpdateOrder(O storage.Order) error {
+func (s *Store) UpdateOrder(ctx context.Context, O Order.Order) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 
 	if O.DeliveryAddress != "" {
 		_, err := s.cl.Exec(
-			context.Background(), `
+			ctx, `
 			UPDATE orders
 			SET deliveryAddress = $2
 			WHERE id = $1;
@@ -192,12 +186,12 @@ func (s *Store) UpdateOrder(O storage.Order) error {
 	}
 	if O.Books != nil {
 		var Books = O.Books
-		var book_price int
-		var book_id []int
+		var bookPrice int
+		var bookID []int
 		for i := 0; i < len(Books); i++ {
 			b := Books[i]
 			rows, err := s.cl.Query(
-				context.Background(),
+				ctx,
 				`
 				SELECT price from books 
                 WHERE id = $1; 
@@ -209,7 +203,7 @@ func (s *Store) UpdateOrder(O storage.Order) error {
 			}
 			var price int
 			for rows.Next() {
-				var t storage.Book
+				var t Book.Book
 				err = rows.Scan(
 					&t.Price,
 				)
@@ -217,17 +211,17 @@ func (s *Store) UpdateOrder(O storage.Order) error {
 					return err
 				}
 				price = t.Price
-				book_id = append(book_id, b.Id)
-				book_price = book_price + price
+				bookID = append(bookID, b.Id)
+				bookPrice = bookPrice + price
 			}
 		}
 		_, err := s.cl.Exec(
-			context.Background(), `
+			ctx, `
 			UPDATE orders
 			SET books_id = $2,
 			price = $3
 			WHERE id = $1;
-		`, O.ID, book_id, book_price,
+		`, O.ID, bookID, bookPrice,
 		)
 		if err != nil {
 			return err
@@ -237,11 +231,11 @@ func (s *Store) UpdateOrder(O storage.Order) error {
 }
 
 // удаляет заказ
-func (s *Store) DeleteOrder(O storage.Order) error {
+func (s *Store) DeleteOrder(ctx context.Context, O Order.Order) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 	_, err := s.cl.Exec(
-		context.Background(), `DELETE FROM orders WHERE id = $1 ;`, O.ID)
+		ctx, `DELETE FROM orders WHERE id = $1 ;`, O.ID)
 	if err != nil {
 		return err
 	}
@@ -249,20 +243,20 @@ func (s *Store) DeleteOrder(O storage.Order) error {
 }
 
 // выдает все книги
-func (s *Store) Books() ([]storage.Book, error) {
+func (s *Store) GetBooks(ctx context.Context) ([]Book.Book, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	rows, err := s.cl.Query(
-		context.Background(), `
+		ctx, `
 		SELECT * from books
 		ORDER BY id ASC;
 `)
 	if err != nil {
 		return nil, err
 	}
-	var book []storage.Book
+	var book []Book.Book
 	for rows.Next() {
-		var b storage.Book
+		var b Book.Book
 		err = rows.Scan(
 			&b.Id,
 			&b.Title,
@@ -278,11 +272,11 @@ func (s *Store) Books() ([]storage.Book, error) {
 }
 
 // добавляет книгу
-func (s *Store) AddBooks(B storage.Book) error {
+func (s *Store) AddBooks(ctx context.Context, B Book.Book) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 	_, err := s.cl.Exec(
-		context.Background(),
+		ctx,
 		`
 		INSERT INTO books (title, author, price) VALUES ($1, $2, $3);
 	`,
@@ -297,12 +291,12 @@ func (s *Store) AddBooks(B storage.Book) error {
 }
 
 // обновляет данные книги
-func (s *Store) UpdateBook(B storage.Book) error {
+func (s *Store) UpdateBook(ctx context.Context, B Book.Book) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 	if B.Author != "" {
 		_, err := s.cl.Exec(
-			context.Background(),
+			ctx,
 			`
 			UPDATE books
 			SET author = $2
@@ -315,7 +309,7 @@ func (s *Store) UpdateBook(B storage.Book) error {
 	}
 	if B.Price != 0 {
 		_, err := s.cl.Exec(
-			context.Background(),
+			ctx,
 			`
 			UPDATE books
 			SET price = $2
@@ -328,7 +322,7 @@ func (s *Store) UpdateBook(B storage.Book) error {
 	}
 	if B.Title != "" {
 		_, err := s.cl.Exec(
-			context.Background(),
+			ctx,
 			`
 			UPDATE books
 			SET title = $2
@@ -343,11 +337,11 @@ func (s *Store) UpdateBook(B storage.Book) error {
 }
 
 // удаляет книгу
-func (s *Store) DeleteBook(B storage.Book) error {
+func (s *Store) DeleteBook(ctx context.Context, B Book.Book) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 	_, err := s.cl.Exec(
-		context.Background(), `DELETE FROM books WHERE id = $1 ;`, B.Id)
+		ctx, `DELETE FROM books WHERE id = $1 ;`, B.Id)
 	if err != nil {
 		return err
 	}
