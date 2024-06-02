@@ -84,10 +84,27 @@ func (s *Store) UpdateBook(ctx context.Context, B Book.Book) error {
 	defer s.m.Unlock()
 	collection := s.cl.Database(databaseName).Collection(collectionBook)
 	filter := bson.M{"id": B.Id}
-	update := bson.M{"$set": bson.M{"Title": B.Title, "Author": B.Author, "Price": B.Price}}
-	_, err := collection.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return err
+	var update bson.M
+	if B.Author != "" {
+		update = bson.M{"$set": bson.M{"Author": B.Author}}
+		_, err := collection.UpdateOne(ctx, filter, update)
+		if err != nil {
+			return err
+		}
+	}
+	if B.Title != "" {
+		update = bson.M{"$set": bson.M{"Title": B.Title}}
+		_, err := collection.UpdateOne(ctx, filter, update)
+		if err != nil {
+			return err
+		}
+	}
+	if B.Price != 0 {
+		update = bson.M{"$set": bson.M{"Price": B.Price}}
+		_, err := collection.UpdateOne(ctx, filter, update)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -189,8 +206,10 @@ func (s *Store) UpdateOrder(ctx context.Context, O Order.Order) error {
 	var update bson.M
 	if O.DeliveryAddress == "" {
 		update = bson.M{"$set": bson.M{"Books": O.Books, "Price": O.Price}}
-	} else {
+	} else if O.DeliveryAddress != "" && O.Books != nil {
 		update = bson.M{"$set": bson.M{"DeliveryAddress": O.DeliveryAddress, "Books": O.Books, "Price": O.Price}}
+	} else {
+		update = bson.M{"$set": bson.M{"DeliveryAddress": O.DeliveryAddress}}
 	}
 	_, err := collection.UpdateOne(ctx, filter, update)
 	if err != nil {
