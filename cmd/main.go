@@ -17,7 +17,7 @@ import (
 
 func main() {
 	//PostgreSQL
-	url := "postgres://" + "postgres" + ":" + "postgres" + "@" + "localhost" + ":" + "5432" + "/" + "ttt" // todo вынеси все креды для постгри и монги в файл конфигруации и читай его при запуске
+	url := "postgres://" + "postgres" + ":" + "postgres" + "@" + "localhost" + ":" + "5432" + "/" + "ttt"
 	conn, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		log.Fatalf("Failed to init DB conf - %v", err)
